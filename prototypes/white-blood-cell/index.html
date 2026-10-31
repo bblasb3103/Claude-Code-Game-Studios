@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<!-- PROTOTYPE - NOT FOR PRODUCTION -->
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bạch cầu tiêu diệt mầm bệnh — 3D</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #2a0508; font-family: system-ui, sans-serif; }
+  #hud { position: fixed; top: 12px; left: 12px; color: #fff; background: rgba(0,0,0,.45);
+         padding: 10px 14px; border-radius: 8px; font-size: 14px; line-height: 1.5; max-width: 320px; }
+  #hud b { font-size: 18px; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="hud">
+  <div>Mầm bệnh đã tiêu diệt: <b id="kills">0</b></div>
+  <div>Đang lưu hành: <span id="alive">0</span></div>
+  <div style="margin-top:6px">
+    <span class="dot" style="background:#f4f1ea"></span>Bạch cầu (đại thực bào)<br>
+    <span class="dot" style="background:#5fd35a"></span>Vi khuẩn &nbsp;
+    <span class="dot" style="background:#b05cff"></span>Virus<br>
+    <span class="dot" style="background:#c0141c"></span>Hồng cầu
+  </div>
+  <div style="margin-top:6px;opacity:.8">Bạch cầu phát hiện mầm bệnh → vươn chân giả → nuốt (thực bào) → tiêu hoá bằng enzyme.<br>Kéo chuột để xoay, cuộn để zoom.</div>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// Tuning (prototype: kept in one place instead of external config)
+const CFG = {
+  wbcCount: 3, wbcSpeed: 3, wbcRadius: 2, reach: 1.8,
+  maxPathogens: 14, spawnEvery: 1.6, digestTime: 2.5,
+  rbcCount: 35, arena: 12,
+};
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x2a0508);
+scene.fog = new THREE.FogExp2(0x2a0508, 0.035);
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 200);
+camera.position.set(0, 7, 20);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.4;
+
+scene.add(new THREE.HemisphereLight(0xffd6d6, 0x400000, 1.2));
+const sun = new THREE.DirectionalLight(0xffffff, 2);
+sun.position.set(5, 10, 7);
+scene.add(sun);
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const randInArena = (s = 1) => new THREE.Vector3(rand(-1, 1), rand(-0.5, 0.5), rand(-1, 1)).multiplyScalar(CFG.arena * s);
+function clampArena(p) {
+  p.x = THREE.MathUtils.clamp(p.x, -CFG.arena, CFG.arena);
+  p.y = THREE.MathUtils.clamp(p.y, -CFG.arena / 2, CFG.arena / 2);
+  p.z = THREE.MathUtils.clamp(p.z, -CFG.arena, CFG.arena);
+}
+
+// ---------- Red blood cells: biconcave discs drifting with the "blood flow" ----------
+const rbcProfile = [];
+// biconcave: thin centre, thick rim
+const rbcH = t => 0.08 + 0.22 * Math.sin(t * Math.PI * 0.8);
+for (let i = 0; i <= 16; i++) rbcProfile.push(new THREE.Vector2(i / 16, -rbcH(i / 16)));
+for (let i = 16; i >= 0; i--) rbcProfile.push(new THREE.Vector2(i / 16, rbcH(i / 16)));
+const rbcGeo = new THREE.LatheGeometry(rbcProfile, 28);
+rbcGeo.computeVertexNormals();
+const rbcMat = new THREE.MeshStandardMaterial({ color: 0xc0141c, roughness: 0.45, side: THREE.DoubleSide });
+const rbcs = [];
+for (let i = 0; i < CFG.rbcCount; i++) {
+  const m = new THREE.Mesh(rbcGeo, rbcMat);
+  m.position.copy(randInArena(1.3));
+  if (m.position.z > 6) m.position.z -= 12; // keep discs out of the camera's face
+  m.rotation.set(rand(0, 6), rand(0, 6), 0);
+  m.userData.spin = new THREE.Vector3(rand(-.5, .5), rand(-.5, .5), 0);
+  m.userData.speed = rand(1, 2.5);
+  scene.add(m);
+  rbcs.push(m);
+}
+
+// ---------- White blood cells: wobbling membrane + lobed nucleus ----------
+const wbcs = [];
+for (let i = 0; i < CFG.wbcCount; i++) {
+  const geo = new THREE.SphereGeometry(CFG.wbcRadius, 64, 48);
+  const base = geo.attributes.position.array.slice();
+  const membrane = new THREE.Mesh(geo, new THREE.MeshPhysicalMaterial({
+    color: 0xf4f1ea, roughness: 0.35, transmission: 0.4, thickness: 1.5,
+    emissive: 0x332f2a, transparent: true, opacity: 0.8,
+  }));
+  const group = new THREE.Group();
+  group.add(membrane);
+  const nucMat = new THREE.MeshStandardMaterial({ color: 0x6a2c9e, roughness: 0.6 });
+  for (let k = 0; k < 3; k++) { // multi-lobed nucleus, like a neutrophil
+    const lobe = new THREE.Mesh(new THREE.SphereGeometry(0.55, 20, 16), nucMat);
+    lobe.position.set(Math.cos(k * 2.1) * 0.65, Math.sin(k * 1.7) * 0.3, Math.sin(k * 2.1) * 0.65);
+    group.add(lobe);
+  }
+  group.position.copy(randInArena(0.6));
+  scene.add(group);
+  wbcs.push({ group, membrane, base, phase: rand(0, 10), target: null, vel: new THREE.Vector3(), stretch: 0, dir: new THREE.Vector3(1, 0, 0) });
+}
+
+// Displace membrane vertices: organic wobble + a pseudopod bulging toward the target.
+const _n = new THREE.Vector3(), _dirLocal = new THREE.Vector3(), _q = new THREE.Quaternion();
+function deformMembrane(w, t) {
+  const pos = w.membrane.geometry.attributes.position;
+  const arr = pos.array, base = w.base, R = CFG.wbcRadius;
+  _dirLocal.copy(w.dir).applyQuaternion(_q.copy(w.group.quaternion).invert());
+  for (let i = 0; i < arr.length; i += 3) {
+    _n.set(base[i], base[i + 1], base[i + 2]).divideScalar(R);
+    const wob = 0.08 * Math.sin(_n.x * 4 + t * 2 + w.phase) * Math.cos(_n.y * 5 - t * 1.6)
+              + 0.05 * Math.sin(_n.z * 7 + t * 3);
+    const d = Math.max(0, _n.dot(_dirLocal));
+    const pod = w.stretch * CFG.reach * Math.pow(d, 6);
+    const s = R * (1 + wob) + pod;
+    arr[i] = _n.x * s; arr[i + 1] = _n.y * s; arr[i + 2] = _n.z * s;
+  }
+  pos.needsUpdate = true;
+  w.membrane.geometry.computeVertexNormals();
+}
+
+// ---------- Pathogens: rod bacteria and spiky viruses ----------
+const bactGeo = new THREE.CapsuleGeometry(0.22, 0.7, 6, 12);
+const virusCore = new THREE.IcosahedronGeometry(0.3, 1);
+const spikeGeo = new THREE.ConeGeometry(0.05, 0.22, 6);
+const pathogens = [];
+let kills = 0, spawnTimer = 0;
+
+function spawnPathogen() {
+  let mesh;
+  if (Math.random() < 0.6) {
+    mesh = new THREE.Mesh(bactGeo, new THREE.MeshStandardMaterial({ color: 0x5fd35a, roughness: 0.5, emissive: 0x0b3a09, transparent: true }));
+  } else {
+    const mat = new THREE.MeshStandardMaterial({ color: 0xb05cff, roughness: 0.4, emissive: 0x2a0a4a, transparent: true });
+    mesh = new THREE.Mesh(virusCore, mat);
+    const v = virusCore.attributes.position;
+    for (let i = 0; i < v.count; i += 3) { // spike on a subset of vertices
+      const spike = new THREE.Mesh(spikeGeo, mat);
+      const p = new THREE.Vector3().fromBufferAttribute(v, i);
+      spike.position.copy(p).multiplyScalar(1.15);
+      spike.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), p.normalize());
+      mesh.add(spike);
+    }
+  }
+  mesh.scale.setScalar(1.6);
+  mesh.position.copy(randInArena());
+  mesh.rotation.set(rand(0, 6), rand(0, 6), rand(0, 6));
+  scene.add(mesh);
+  pathogens.push({ mesh, vel: new THREE.Vector3(rand(-1, 1), rand(-.5, .5), rand(-1, 1)), state: 'free', by: null, t: 0, phase: rand(0, 10) });
+}
+for (let i = 0; i < 8; i++) spawnPathogen();
+
+// ---------- Simulation ----------
+const clock = new THREE.Clock();
+const _tmp = new THREE.Vector3();
+const killsEl = document.getElementById('kills'), aliveEl = document.getElementById('alive');
+
+function step() {
+  const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
+
+  for (const r of rbcs) {
+    r.position.x += r.userData.speed * dt;
+    if (r.position.x > CFG.arena * 1.4) r.position.x = -CFG.arena * 1.4;
+    r.rotation.x += r.userData.spin.x * dt; r.rotation.y += r.userData.spin.y * dt;
+  }
+
+  spawnTimer += dt;
+  if (spawnTimer > CFG.spawnEvery && pathogens.length < CFG.maxPathogens) { spawnTimer = 0; spawnPathogen(); }
+
+  // Pathogens: random swim; captured ones get pulled in, shrink and fade (digestion).
+  for (let i = pathogens.length - 1; i >= 0; i--) {
+    const p = pathogens[i];
+    if (p.state === 'free') {
+      p.vel.x += Math.sin(t * 0.7 + p.phase) * dt; p.vel.z += Math.cos(t * 0.6 + p.phase) * dt;
+      p.vel.clampLength(0, 1.2);
+      p.mesh.position.addScaledVector(p.vel, dt);
+      clampArena(p.mesh.position);
+      p.mesh.rotation.x += dt * 0.8; p.mesh.rotation.y += dt * 0.5;
+    } else {
+      p.t += dt;
+      const k = Math.min(p.t / CFG.digestTime, 1);
+      p.mesh.position.lerp(_tmp.copy(p.by.group.position), Math.min(1, dt * 3));
+      p.mesh.scale.setScalar(1.6 * (1 - k * 0.9));
+      p.mesh.material.opacity = 1 - k;
+      p.mesh.material.color.lerp(new THREE.Color(0x553311), dt);
+      if (k >= 1) {
+        scene.remove(p.mesh);
+        pathogens.splice(i, 1);
+        kills++;
+      }
+    }
+  }
+
+  // White blood cells: chemotaxis toward nearest untargeted pathogen, then engulf.
+  for (const w of wbcs) {
+    if (!w.target || w.target.state !== 'free') {
+      w.target = null;
+      let best = Infinity;
+      for (const p of pathogens) {
+        if (p.state !== 'free' || wbcs.some(o => o !== w && o.target === p)) continue;
+        const d = p.mesh.position.distanceToSquared(w.group.position);
+        if (d < best) { best = d; w.target = p; }
+      }
+    }
+    let goalStretch = 0;
+    if (w.target) {
+      _tmp.subVectors(w.target.mesh.position, w.group.position);
+      const dist = _tmp.length();
+      w.dir.lerp(_tmp.normalize(), Math.min(1, dt * 4)).normalize();
+      w.vel.lerp(_tmp.multiplyScalar(CFG.wbcSpeed), dt * 2);
+      goalStretch = dist < 5 ? 1 : 0.3;
+      if (dist < CFG.wbcRadius + CFG.reach * 0.9) { // pseudopod reached it → phagocytosis
+        w.target.state = 'eaten'; w.target.by = w; w.target = null;
+      }
+    } else {
+      w.vel.multiplyScalar(1 - dt);
+    }
+    w.stretch += (goalStretch - w.stretch) * Math.min(1, dt * 3);
+    w.group.position.addScaledVector(w.vel, dt);
+    clampArena(w.group.position);
+    w.group.rotation.y += dt * 0.2;
+    deformMembrane(w, t);
+  }
+
+  killsEl.textContent = kills;
+  aliveEl.textContent = pathogens.filter(p => p.state === 'free').length;
+  controls.update();
+  renderer.render(scene, camera);
+}
+renderer.setAnimationLoop(step);
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
