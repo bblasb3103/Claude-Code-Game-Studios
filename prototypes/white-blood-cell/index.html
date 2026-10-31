@@ -37,7 +37,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 // Tuning (prototype: kept in one place instead of external config)
 const CFG = {
-  wbcCount: 3, wbcSpeed: 3, wbcRadius: 2, reach: 1.8,
+  wbcCount: 3, wbcSpeed: 5, wbcRadius: 3, reach: 2.5,
   maxPathogens: 14, spawnEvery: 1.6, digestTime: 2.5,
   rbcCount: 35, arena: 12,
 };
@@ -105,8 +105,8 @@ for (let i = 0; i < CFG.wbcCount; i++) {
   group.add(membrane);
   const nucMat = new THREE.MeshStandardMaterial({ color: 0x6a2c9e, roughness: 0.6 });
   for (let k = 0; k < 3; k++) { // multi-lobed nucleus, like a neutrophil
-    const lobe = new THREE.Mesh(new THREE.SphereGeometry(0.55, 20, 16), nucMat);
-    lobe.position.set(Math.cos(k * 2.1) * 0.65, Math.sin(k * 1.7) * 0.3, Math.sin(k * 2.1) * 0.65);
+    const lobe = new THREE.Mesh(new THREE.SphereGeometry(0.28 * CFG.wbcRadius, 20, 16), nucMat);
+    lobe.position.set(Math.cos(k * 2.1) * 0.33 * CFG.wbcRadius, Math.sin(k * 1.7) * 0.15 * CFG.wbcRadius, Math.sin(k * 2.1) * 0.33 * CFG.wbcRadius);
     group.add(lobe);
   }
   group.position.copy(randInArena(0.6));
@@ -221,7 +221,7 @@ function step() {
       _tmp.subVectors(w.target.mesh.position, w.group.position);
       const dist = _tmp.length();
       w.dir.lerp(_tmp.normalize(), Math.min(1, dt * 4)).normalize();
-      w.vel.lerp(_tmp.multiplyScalar(CFG.wbcSpeed), dt * 2);
+      w.vel.lerp(_tmp.multiplyScalar(CFG.wbcSpeed), dt * 3);
       goalStretch = dist < 5 ? 1 : 0.3;
       if (dist < CFG.wbcRadius + CFG.reach * 0.9) { // pseudopod reached it → phagocytosis
         w.target.state = 'eaten'; w.target.by = w; w.target = null;
